@@ -1080,14 +1080,15 @@ function openTx(id = null) {
   $('#txDate').value = t?.date ?? defaultDate();
   $('#txNote').value = t?.note ?? '';
   $('#txDialogTitle').textContent = t ? 'Edit spending' : 'Add spending';
-  $('#txSubmit').textContent = t ? 'Save changes' : 'Add';
+  $('#txSubmit').textContent = t ? 'Save' : 'Add';
   $('#txDelete').hidden = !t;
   setAmountError('');
   renderTxCategories(t?.cat ?? view.cat ?? state.lastCat);
   renderNoteSuggestions();
   updateJarHint();
   showSheet(txDialog);
-  if (!t) $('#txAmount').focus();
+  // preventScroll: the field is already on screen, so don't let the browser shift the page.
+  if (!t) $('#txAmount').focus({ preventScroll: true });
 }
 
 // A modal sheet locks the page behind it, so if a browser ever fails to draw
@@ -1735,22 +1736,6 @@ function init() {
     installPrompt = null;
     renderInstall();
   });
-
-  // Phone keyboards cover the page instead of shrinking it. Measure what's still
-  // visible so the sheets (and their Add button) sit above the keyboard.
-  const vv = window.visualViewport;
-  if (vv) {
-    const rootStyle = document.documentElement.style;
-    const syncViewport = () => {
-      const zoomed = Math.abs(vv.scale - 1) > 0.01;
-      const covered = zoomed ? 0 : Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop));
-      rootStyle.setProperty('--keyboard', `${covered}px`);
-      rootStyle.setProperty('--viewport', `${Math.round(zoomed ? innerHeight : vv.height)}px`);
-    };
-    vv.addEventListener('resize', syncViewport);
-    vv.addEventListener('scroll', syncViewport);
-    syncViewport();
-  }
 
   // all sheets: close buttons and tapping outside
   for (const dialog of $$('dialog')) {

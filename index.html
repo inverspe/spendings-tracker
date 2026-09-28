@@ -19,14 +19,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- crossorigin lets the service worker keep a copy, so the typeface works offline too -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" crossorigin>
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="stylesheet" href="styles.css?v=4">
 <script>
   try {
     var t = localStorage.getItem('money-tracker:theme');
     if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
   } catch (e) {}
 </script>
-<script src="app.js?v=3" defer></script>
+<script src="app.js?v=4" defer></script>
 </head>
 <body>
 
@@ -154,11 +154,12 @@
 
 <dialog class="sheet" id="txDialog" aria-labelledby="txDialogTitle">
   <form id="txForm" novalidate>
-    <header class="sheet-head">
+    <!-- Actions live in the top bar, like iPhone's own "new item" sheets, so the
+         keyboard never covers them and nothing has to resize around it. -->
+    <header class="sheet-head sheet-bar">
+      <button class="text-btn" type="button" data-close>Cancel</button>
       <h2 id="txDialogTitle">Add spending</h2>
-      <button class="icon-btn" type="button" data-close aria-label="Close">
-        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
+      <button class="btn btn-primary" type="submit" id="txSubmit">Add</button>
     </header>
     <div class="sheet-body">
       <div class="field">
@@ -186,13 +187,9 @@
         <input id="txNote" list="noteSuggestions" maxlength="120" autocomplete="off" placeholder="What was it for?">
         <datalist id="noteSuggestions"></datalist>
       </div>
+
+      <button class="btn btn-danger sheet-delete" type="button" id="txDelete" hidden>Delete this purchase</button>
     </div>
-    <footer class="sheet-foot">
-      <button class="btn btn-danger" type="button" id="txDelete" hidden>Delete</button>
-      <span class="spacer"></span>
-      <button class="btn btn-ghost" type="button" data-close>Cancel</button>
-      <button class="btn btn-primary" type="submit" id="txSubmit">Add</button>
-    </footer>
   </form>
 </dialog>
 

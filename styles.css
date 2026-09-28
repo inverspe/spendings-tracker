@@ -729,15 +729,14 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 
 /* ---------- sheets (dialogs) ---------- */
 
-/* Plain block layout on purpose: the sheet itself scrolls, and the header and
-   footer stick to its edges. A flex column here collapsed to zero height in
-   Safari 16, leaving only the dimmed backdrop. --keyboard and --viewport come
-   from app.js, so the sheet sits above an on-screen keyboard, not behind it. */
+/* Plain block layout on purpose: the sheet itself scrolls and its header sticks
+   to the top. A flex column here collapsed to zero height in Safari 16, leaving
+   only the dimmed backdrop. The size never follows the on-screen keyboard: the
+   keyboard slides over the lower fields, and the actions stay in the header. */
 .sheet {
-  inset-block-end: var(--keyboard, 0px);
   width: 100%;
   max-width: 100%;
-  max-height: min(94dvh, calc(var(--viewport, 100dvh) - 8px));
+  max-height: 94dvh;
   margin: auto 0 0;
   padding: 0;
   overflow-x: hidden;
@@ -776,20 +775,21 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 .sheet-body {
   display: grid;
   gap: 18px;
-  padding: 10px 20px 22px;
+  padding: 10px 20px calc(22px + env(safe-area-inset-bottom));
 }
-.sheet-foot {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 20px calc(14px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
-  background: var(--surface);
+
+/* Cancel, title, Add: the way iPhone lays out its own "new item" sheets. */
+.sheet-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
 }
-.spacer { flex: 1; }
+.sheet-bar h2 { font-size: 17px; text-align: center; white-space: nowrap; }
+.sheet-bar .text-btn { justify-self: start; padding: 10px 8px; font-size: 16px; }
+.sheet-bar .btn { justify-self: end; min-height: 38px; padding: 0 18px; }
+.sheet-bar + .sheet-body { padding-top: 18px; }
+.sheet-delete { justify-self: start; margin-top: 4px; padding: 0 8px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { position: relative; display: block; }
@@ -876,12 +876,12 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 @media (min-width: 640px) {
   .sheet {
     width: min(560px, calc(100% - 32px));
-    max-height: calc(var(--viewport, 100dvh) - 48px);
+    max-height: calc(100dvh - 48px);
     margin: auto;
     border-radius: 20px;
   }
-  .sheet-tall { height: min(760px, calc(var(--viewport, 100dvh) - 48px)); }
-  .sheet-foot { padding-bottom: 14px; }
+  .sheet-tall { height: min(760px, calc(100dvh - 48px)); }
+  .sheet-body { padding-bottom: 22px; }
 }
 
 @media (min-width: 960px) {

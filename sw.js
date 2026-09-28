@@ -2,7 +2,7 @@
 // App files are network-first, so a new version shows up on the next load
 // whenever you're online; the cached copy is only used when the network isn't.
 
-const CACHE = 'money-tracker-v3';
+const CACHE = 'money-tracker-v4';
 const FONT_CACHE = 'money-tracker-fonts';
 const APP_FILES = [
   './',
