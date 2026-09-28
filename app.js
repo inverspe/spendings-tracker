@@ -1086,8 +1086,20 @@ function openTx(id = null) {
   renderTxCategories(t?.cat ?? view.cat ?? state.lastCat);
   renderNoteSuggestions();
   updateJarHint();
-  txDialog.showModal();
+  showSheet(txDialog);
   if (!t) $('#txAmount').focus();
+}
+
+// A modal sheet locks the page behind it, so if a browser ever fails to draw
+// one, close it again rather than leave the page dimmed and unusable.
+function showSheet(dialog) {
+  dialog.showModal();
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (dialog.open && dialog.getBoundingClientRect().height < 40) {
+      dialog.close();
+      toast("That didn't open properly. Reload the page and try again.");
+    }
+  }));
 }
 
 function renderTxCategories(selected) {
@@ -1248,7 +1260,7 @@ function openSettings() {
   renderSettings();
   $('#dataMsg').textContent = '';
   $('#catAddMsg').textContent = '';
-  settingsDialog.showModal();
+  showSheet(settingsDialog);
 }
 
 function renderSettings() {
@@ -1723,6 +1735,22 @@ function init() {
     installPrompt = null;
     renderInstall();
   });
+
+  // Phone keyboards cover the page instead of shrinking it. Measure what's still
+  // visible so the sheets (and their Add button) sit above the keyboard.
+  const vv = window.visualViewport;
+  if (vv) {
+    const rootStyle = document.documentElement.style;
+    const syncViewport = () => {
+      const zoomed = Math.abs(vv.scale - 1) > 0.01;
+      const covered = zoomed ? 0 : Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop));
+      rootStyle.setProperty('--keyboard', `${covered}px`);
+      rootStyle.setProperty('--viewport', `${Math.round(zoomed ? innerHeight : vv.height)}px`);
+    };
+    vv.addEventListener('resize', syncViewport);
+    vv.addEventListener('scroll', syncViewport);
+    syncViewport();
+  }
 
   // all sheets: close buttons and tapping outside
   for (const dialog of $$('dialog')) {

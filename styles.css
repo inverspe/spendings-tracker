@@ -284,7 +284,12 @@ ul { padding: 0; list-style: none; }
 :where(input, select):focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 ::placeholder { color: var(--ink-3); opacity: 1; }
 select { padding-right: 8px; }
-input[type="date"] { min-width: 0; }
+/* iPhone: no second magnifying glass in the search box, and a date field
+   that lines up with the other inputs. */
+input[type="search"] { -webkit-appearance: none; appearance: none; }
+input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; }
+input[type="date"] { min-width: 0; -webkit-appearance: none; appearance: none; text-align: left; }
+input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 
 .field { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .field > label, .field > legend {
@@ -724,48 +729,65 @@ input[type="date"] { min-width: 0; }
 
 /* ---------- sheets (dialogs) ---------- */
 
+/* Plain block layout on purpose: the sheet itself scrolls, and the header and
+   footer stick to its edges. A flex column here collapsed to zero height in
+   Safari 16, leaving only the dimmed backdrop. --keyboard and --viewport come
+   from app.js, so the sheet sits above an on-screen keyboard, not behind it. */
 .sheet {
+  inset-block-end: var(--keyboard, 0px);
   width: 100%;
   max-width: 100%;
-  max-height: min(94dvh, 100%);
+  max-height: min(94dvh, calc(var(--viewport, 100dvh) - 8px));
   margin: auto 0 0;
   padding: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 0;
   border-radius: 20px 20px 0 0;
   background: var(--surface);
   box-shadow: var(--shadow-pop);
   color: var(--ink);
 }
-.sheet[open] { display: flex; flex-direction: column; animation: sheet-in .28s cubic-bezier(.2, .8, .2, 1); }
-.sheet::backdrop { background: var(--scrim); }
+.sheet[open] { animation: sheet-in .28s cubic-bezier(.2, .8, .2, 1); }
+/* Older Safari doesn't pass custom properties into ::backdrop, so these are literal colours. */
+.sheet::backdrop { background: rgba(12, 24, 18, .45); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sheet::backdrop { background: rgba(0, 0, 0, .6); }
+}
+:root[data-theme="dark"] .sheet::backdrop { background: rgba(0, 0, 0, .6); }
 .sheet[open]::backdrop { animation: fade-in .2s ease-out; }
-@keyframes sheet-in { from { opacity: 0; transform: translateY(28px); } }
+/* Slide only, no fade: if an animation ever stalls, the sheet must still be visible. */
+@keyframes sheet-in { from { transform: translateY(28px); } }
 @keyframes fade-in { from { opacity: 0; } }
-.sheet > form { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 
 .sheet-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 14px 12px 6px 20px;
+  background: var(--surface);
 }
 .sheet-head h2 { font-size: 20px; font-weight: 650; font-stretch: 112%; letter-spacing: -.01em; }
 .sheet-body {
   display: grid;
   gap: 18px;
-  min-height: 0;
   padding: 10px 20px 22px;
-  overflow: auto;
-  overscroll-behavior: contain;
 }
 .sheet-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 12px 20px calc(14px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
+  background: var(--surface);
 }
 .spacer { flex: 1; }
 
@@ -797,7 +819,8 @@ input[type="date"] { min-width: 0; }
 .chip-new { gap: 4px; padding-left: 10px; border-style: dashed; background: none; color: var(--ink-2); }
 .chip-new:hover { background: var(--hover); color: var(--ink); }
 .chip-new .i { width: 16px; height: 16px; stroke-width: 2; }
-.chip-input { width: 180px; height: 36px; border-color: var(--field-border); background: var(--field); }
+/* 16px: anything smaller makes iPhone Safari zoom the page when the field is focused. */
+.chip-input { width: 180px; height: 36px; border-color: var(--field-border); background: var(--field); font-size: 16px; }
 
 /* settings */
 .settings { gap: 30px; }
@@ -853,10 +876,11 @@ input[type="date"] { min-width: 0; }
 @media (min-width: 640px) {
   .sheet {
     width: min(560px, calc(100% - 32px));
+    max-height: calc(var(--viewport, 100dvh) - 48px);
     margin: auto;
     border-radius: 20px;
   }
-  .sheet-tall { height: min(760px, calc(100dvh - 48px)); }
+  .sheet-tall { height: min(760px, calc(var(--viewport, 100dvh) - 48px)); }
   .sheet-foot { padding-bottom: 14px; }
 }
 

@@ -2,7 +2,7 @@
 // App files are network-first, so a new version shows up on the next load
 // whenever you're online; the cached copy is only used when the network isn't.
 
-const CACHE = 'money-tracker-v2';
+const CACHE = 'money-tracker-v3';
 const FONT_CACHE = 'money-tracker-fonts';
 const APP_FILES = [
   './',
@@ -47,9 +47,15 @@ self.addEventListener('fetch', event => {
 
 async function networkFirst(request) {
   const cache = await caches.open(CACHE);
-  const network = fetch(request).then(response => {
-    if (response.ok) cache.put(request, response.clone());
-    return response;
+  // no-cache: always check with the server (a cheap 304 when nothing changed),
+  // so a fix shows up on the next load instead of after the host's 10-minute cache.
+  const network = fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' }).then(response => {
+    // Navigations can't be answered with a redirected response, so copy it into a plain one.
+    const clean = response.redirected
+      ? new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers })
+      : response;
+    if (clean.ok) cache.put(request, clean.clone());
+    return clean;
   });
   network.catch(() => {}); // a failure is handled below; this just keeps the console quiet
   try {
