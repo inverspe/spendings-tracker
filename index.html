@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Spendings Tracker</title>
+<meta name="description" content="Set a weekly or monthly spending limit, watch your cash jar empty as you spend, and keep a streak of staying under it.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f1f4ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1511" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Spendings">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- crossorigin lets the service worker keep a copy, so the typeface works offline too -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" crossorigin>
+<link rel="stylesheet" href="styles.css">
+<script>
+  try {
+    var t = localStorage.getItem('money-tracker:theme');
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+<script src="app.js" defer></script>
+</head>
+<body>
+
+<header class="topbar" id="topbar">
+  <div class="topbar-inner">
+    <div class="wordmark" aria-hidden="true">
+      <img class="wordmark-mark" src="icons/icon.svg" alt="" width="28" height="28">
+      <span>Spendings Tracker</span>
+    </div>
+    <h1 class="sr-only">Spendings Tracker</h1>
+
+    <nav class="period-nav" aria-label="Choose week or month">
+      <button class="icon-btn" id="prevPeriod" type="button" aria-label="Previous">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <p class="period-label" id="periodLabel" aria-live="polite"></p>
+      <button class="icon-btn" id="nextPeriod" type="button" aria-label="Next">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <button class="text-btn" id="toCurrent" type="button" hidden>Today</button>
+    </nav>
+
+    <div class="topbar-actions">
+      <button class="btn btn-primary add-desktop" type="button" data-add title="Add spending (N)">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        Add
+      </button>
+      <button class="icon-btn" id="openSettings" type="button" aria-label="Settings">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="banner" id="banner" hidden></div>
+
+<main class="layout" id="main">
+
+  <section class="hero" id="hero" aria-labelledby="heroLabel">
+    <div class="hero-main">
+      <svg class="jar" id="jar" viewBox="0 0 230 250" aria-hidden="true"></svg>
+
+      <div class="hero-text" id="heroText" tabindex="-1">
+        <p class="hero-label" id="heroLabel"></p>
+        <p class="hero-figure">
+          <span class="sr-only" id="heroFigureText"></span>
+          <span class="figure" id="heroFigure" aria-hidden="true"></span>
+        </p>
+        <p class="hero-of" id="heroOf"></p>
+        <p class="hero-guide" id="heroGuide"></p>
+      </div>
+
+      <form class="setup" id="setupForm" novalidate hidden>
+        <h2 class="setup-title" id="setupTitle">Set your spending limit</h2>
+        <p class="setup-text">Your jar fills with this much cash. Everything you spend takes some out. Finish under the limit to start a streak.</p>
+        <div class="limit-row">
+          <div class="amount-input amount-compact">
+            <span class="amount-cur" data-currency aria-hidden="true"></span>
+            <input id="setupAmount" inputmode="decimal" autocomplete="off" placeholder="300" aria-label="Spending limit" aria-describedby="setupError">
+          </div>
+          <div class="seg" role="radiogroup" aria-label="Limit period">
+            <label><input type="radio" name="setupPeriod" value="week" checked><span>per week</span></label>
+            <label><input type="radio" name="setupPeriod" value="month"><span>per month</span></label>
+          </div>
+        </div>
+        <p class="field-error" id="setupError" hidden></p>
+        <div class="btn-row">
+          <button class="btn btn-primary" type="submit">Fill the jar</button>
+          <button class="btn btn-ghost" type="button" id="setupSample">Explore with sample data</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="streak" id="streak">
+      <svg class="seal" id="seal" viewBox="-40 -40 80 80" aria-hidden="true"></svg>
+      <div class="streak-text">
+        <p class="streak-title" id="streakTitle"></p>
+        <p class="streak-sub" id="streakSub"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block where" aria-labelledby="whereTitle">
+    <header class="block-head">
+      <h2 id="whereTitle">Where it went</h2>
+      <p class="block-sub" id="whereSub"></p>
+    </header>
+    <ul class="cats" id="whereList"></ul>
+    <p class="empty" id="whereEmpty" hidden></p>
+  </section>
+
+  <section class="block history" aria-labelledby="historyTitle">
+    <header class="block-head block-head-row">
+      <h2 id="historyTitle">Past weeks</h2>
+      <button class="text-btn" id="historyToggle" type="button" aria-pressed="false">Show table</button>
+    </header>
+    <ul class="legend" id="historyLegend">
+      <li><span class="swatch swatch-under"></span>Under limit</li>
+      <li><span class="swatch swatch-over"></span>Over limit</li>
+      <li><span class="key-limit"></span>Limit</li>
+    </ul>
+    <div class="history-chart" id="historyChart"></div>
+    <p class="empty" id="historyEmpty" hidden></p>
+  </section>
+
+  <section class="block list" id="transactions" aria-labelledby="txTitle">
+    <header class="block-head">
+      <h2 id="txTitle" tabindex="-1">Spending</h2>
+      <label class="search">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+        <span class="sr-only">Search spending</span>
+        <input type="search" id="search" placeholder="Search" autocomplete="off">
+      </label>
+      <div class="active-filter" id="activeFilter" hidden></div>
+    </header>
+    <div id="txList"></div>
+  </section>
+
+</main>
+
+<button class="fab" type="button" data-add aria-label="Add spending">
+  <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+  <span aria-hidden="true">Add</span>
+</button>
+
+<dialog class="sheet" id="txDialog" aria-labelledby="txDialogTitle">
+  <form id="txForm" novalidate>
+    <header class="sheet-head">
+      <h2 id="txDialogTitle">Add spending</h2>
+      <button class="icon-btn" type="button" data-close aria-label="Close">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="sheet-body">
+      <div class="field">
+        <label for="txAmount">Amount</label>
+        <div class="amount-input">
+          <span class="amount-cur" data-currency aria-hidden="true"></span>
+          <input id="txAmount" inputmode="decimal" autocomplete="off" aria-describedby="txAmountError txJarHint">
+        </div>
+        <p class="field-error" id="txAmountError" hidden></p>
+        <p class="hint" id="txJarHint"></p>
+      </div>
+
+      <fieldset class="field">
+        <legend>Category</legend>
+        <div class="chips" id="txCats"></div>
+      </fieldset>
+
+      <div class="field">
+        <label for="txDate">Date</label>
+        <input type="date" id="txDate">
+      </div>
+
+      <div class="field">
+        <label for="txNote">Note <span class="optional">(optional)</span></label>
+        <input id="txNote" list="noteSuggestions" maxlength="120" autocomplete="off" placeholder="What was it for?">
+        <datalist id="noteSuggestions"></datalist>
+      </div>
+    </div>
+    <footer class="sheet-foot">
+      <button class="btn btn-danger" type="button" id="txDelete" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+      <button class="btn btn-primary" type="submit" id="txSubmit">Add</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog class="sheet sheet-tall" id="settingsDialog" aria-labelledby="settingsTitle">
+  <header class="sheet-head">
+    <h2 id="settingsTitle">Settings</h2>
+    <button class="icon-btn" type="button" data-close aria-label="Close">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </header>
+  <div class="sheet-body settings">
+
+    <section class="set-group" aria-labelledby="setLimitTitle">
+      <h3 id="setLimitTitle">Spending limit</h3>
+      <div class="limit-row">
+        <div class="amount-input amount-compact">
+          <span class="amount-cur" data-currency aria-hidden="true"></span>
+          <input id="setLimit" inputmode="decimal" autocomplete="off" placeholder="No limit" aria-label="Spending limit" aria-describedby="setLimitHint">
+        </div>
+        <div class="seg" role="radiogroup" aria-label="Limit period">
+          <label><input type="radio" name="setPeriod" value="week"><span>per week</span></label>
+          <label><input type="radio" name="setPeriod" value="month"><span>per month</span></label>
+        </div>
+      </div>
+      <p class="hint" id="setLimitHint">A new amount applies from the current week or month onward. Switching between weekly and monthly starts a new streak.</p>
+      <div class="field" id="weekStartField">
+        <label for="setWeekStart">Weeks start on</label>
+        <select id="setWeekStart">
+          <option value="1">Monday</option>
+          <option value="0">Sunday</option>
+          <option value="6">Saturday</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="setCurrency">Currency</label>
+        <select id="setCurrency"></select>
+      </div>
+    </section>
+
+    <section class="set-group" aria-labelledby="setCatsTitle">
+      <h3 id="setCatsTitle">Categories</h3>
+      <ul class="cat-edit" id="setCats"></ul>
+      <form class="cat-add" id="catAddForm">
+        <label class="sr-only" for="catAddName">New category name</label>
+        <input id="catAddName" maxlength="40" autocomplete="off" placeholder="New category">
+        <button class="btn btn-ghost" type="submit">Add</button>
+      </form>
+      <p class="hint" id="catAddMsg" role="status"></p>
+    </section>
+
+    <section class="set-group" aria-labelledby="setLookTitle">
+      <h3 id="setLookTitle">Appearance</h3>
+      <div class="seg" role="radiogroup" aria-label="Theme">
+        <label><input type="radio" name="theme" value="system"><span>Automatic</span></label>
+        <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+        <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+      </div>
+    </section>
+
+    <section class="set-group" aria-labelledby="setDataTitle">
+      <h3 id="setDataTitle">Your data</h3>
+      <p class="hint">Everything is saved in this browser, on this device only. Nothing is sent anywhere. Export a backup now and then so you don't lose it, or to move it to another device.</p>
+      <p class="hint" id="lastBackup"></p>
+      <div class="btn-row">
+        <button class="btn btn-ghost" type="button" id="exportJson">Export backup</button>
+        <button class="btn btn-ghost" type="button" id="exportCsv">Export spreadsheet (CSV)</button>
+        <button class="btn btn-ghost" type="button" id="importJson">Import backup</button>
+        <input type="file" id="importFile" accept="application/json,.json" hidden>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" type="button" id="clearSample" hidden>Clear sample data</button>
+        <button class="btn btn-danger" type="button" id="wipeAll">Delete all data</button>
+      </div>
+      <p class="hint" id="dataMsg" role="status"></p>
+    </section>
+
+    <section class="set-group" id="installGroup" aria-labelledby="setInstallTitle" hidden>
+      <h3 id="setInstallTitle">Install</h3>
+      <p class="hint" id="installHint"></p>
+      <div class="btn-row">
+        <button class="btn btn-primary" type="button" id="installBtn" hidden>Install app</button>
+      </div>
+    </section>
+
+  </div>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<noscript><p class="noscript">Spendings Tracker needs JavaScript to run. Turn it on in your browser settings, then reload this page.</p></noscript>
+
+</body>
+</html>
