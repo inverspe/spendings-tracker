@@ -1781,8 +1781,11 @@ function init() {
     fitFigure();
   }).observe($('#historyChart'));
 
-  // once the typeface arrives, re-measure the figure and axis labels
-  document.fonts?.ready.then(() => { fitFigure(); renderHistory(periodTotals()); });
+  // The typeface loads after the first paint, so re-measure the big figure and the
+  // chart's axis labels each time a font finishes loading.
+  const refit = () => { fitFigure(); renderHistory(periodTotals()); };
+  document.fonts?.addEventListener?.('loadingdone', refit);
+  document.fonts?.ready.then(refit);
 
   // another tab changed the data
   addEventListener('storage', e => {
@@ -1808,6 +1811,8 @@ function init() {
       if (state.limits.length) greetNewPeriod();
     }
     render();
+    // A Home Screen app can stay open for days; look for a new version when you come back.
+    navigator.serviceWorker?.getRegistration().then(reg => reg?.update()).catch(() => {});
   });
 
   addEventListener('beforeinstallprompt', e => {
@@ -1832,6 +1837,12 @@ function init() {
   if (isStandalone()) navigator.storage?.persist?.().catch(() => {});
 
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+    // New versions install in the background. If this page was already running under
+    // an older one, offer a reload; the very first install isn't an update.
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) toast('A new version is ready.', 'Reload', () => location.reload());
+    });
     const register = () => navigator.serviceWorker.register('sw.js').catch(() => {});
     if (document.readyState === 'complete') register();
     else addEventListener('load', register);

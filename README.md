@@ -18,6 +18,10 @@ There's no build step. Open `index.html` in a browser, or serve the folder with 
 python -m http.server 8000
 ```
 
+## Icons and launch screens
+
+`python tools/make_images.py` redraws the app icons and the iPhone launch screens (light and dark, one per screen size) and updates the matching tags in `index.html`. It needs Python 3 and nothing else.
+
 ## Publish it with GitHub Pages
 
 1. Push this folder to a public GitHub repository.

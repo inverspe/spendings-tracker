@@ -1,12 +1,14 @@
-// Spendings Tracker service worker: lets the app open offline.
-// App files are network-first, so a new version shows up on the next load
-// whenever you're online; the cached copy is only used when the network isn't.
+// Spendings Tracker service worker: opens the app instantly, online or off.
+//
+// App files are answered from the saved copy straight away and refreshed in the
+// background, so opening the app never waits on the network (a slow connection
+// used to mean seconds of blank screen). Changing CACHE below installs a whole
+// new set of files at once and tells the open page, which offers a reload.
 
-const CACHE = 'money-tracker-v4';
+const CACHE = 'money-tracker-v5';
 const FONT_CACHE = 'money-tracker-fonts';
 const APP_FILES = [
   './',
-  './index.html',
   './styles.css',
   './app.js',
   './manifest.webmanifest',
@@ -16,12 +18,25 @@ const APP_FILES = [
   './icons/apple-touch-icon.png',
 ];
 
+// Files are saved under their address without the ?query, so ?v=5 or ?add reach the same copy.
+const keyOf = url => {
+  const u = new URL(url, self.location);
+  u.search = '';
+  u.hash = '';
+  return u.href;
+};
+
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE)
-      .then(cache => cache.addAll(APP_FILES))
-      .then(() => self.skipWaiting()),
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    // 'reload' skips the browser's own cache, so the saved set is always the latest and complete.
+    await Promise.all(APP_FILES.map(async file => {
+      const res = await fetch(new Request(file, { cache: 'reload' }));
+      if (!res.ok) throw new Error(`${file}: ${res.status}`);
+      await cache.put(keyOf(file), res);
+    }));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', event => {
@@ -39,36 +54,39 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin === self.location.origin) {
-    event.respondWith(networkFirst(request));
+    event.respondWith(appFile(event));
   } else if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     event.respondWith(staleWhileRevalidate(request));
   }
 });
 
-async function networkFirst(request) {
+async function appFile(event) {
+  const { request } = event;
   const cache = await caches.open(CACHE);
-  // no-cache: always check with the server (a cheap 304 when nothing changed),
-  // so a fix shows up on the next load instead of after the host's 10-minute cache.
-  const network = fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' }).then(response => {
-    // Navigations can't be answered with a redirected response, so copy it into a plain one.
-    const clean = response.redirected
-      ? new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers })
-      : response;
-    if (clean.ok) cache.put(request, clean.clone());
-    return clean;
-  });
-  network.catch(() => {}); // a failure is handled below; this just keeps the console quiet
+  const key = keyOf(request.url);
+  const cached = await cache.match(key, { ignoreVary: true });
+  const refresh = revalidate(cache, key, request);
+  event.waitUntil(refresh.catch(() => {})); // keep the worker alive until the saved copy is updated
+  if (cached) return cached;
   try {
-    // A slow connection shouldn't hold the app hostage: after 4s, use the cached copy.
-    return await Promise.race([
-      network,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
-    ]);
+    return await refresh;
   } catch {
-    const cached = await cache.match(request, { ignoreSearch: true })
-      ?? (request.mode === 'navigate' ? await cache.match('./') : undefined);
-    return cached ?? network;
+    // Offline and never saved: any page in the app opens the app.
+    return (request.mode === 'navigate' && await cache.match(keyOf('./'), { ignoreVary: true })) || Response.error();
   }
+}
+
+// no-cache: always ask the server (a cheap 304 when nothing changed), so a fix
+// is saved for the next open instead of after the host's 10-minute cache.
+async function revalidate(cache, key, request) {
+  const res = await fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' });
+  if (!res.ok) return res;
+  // A page can't be answered with a redirected response, so save a plain copy.
+  const clean = res.redirected
+    ? new Response(res.body, { status: res.status, statusText: res.statusText, headers: res.headers })
+    : res;
+  await cache.put(key, clean.clone());
+  return clean;
 }
 
 async function staleWhileRevalidate(request) {
