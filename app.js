@@ -123,9 +123,10 @@ function periodFilter(start) {
   return t => t.date >= start && t.date <= end;
 }
 
+// Spent from the jar in one period (purchases paid from savings left out).
 const spentIn = (start, skipId = null) => {
   const within = periodFilter(start);
-  return state.tx.reduce((sum, t) => sum + (t.id !== skipId && within(t) ? t.amount : 0), 0);
+  return state.tx.reduce((sum, t) => sum + (t.id !== skipId && !t.fromSavings && within(t) ? t.amount : 0), 0);
 };
 
 function rangeLabel(start) {
@@ -318,6 +319,7 @@ function normalize(data) {
       created: Number(t.created) || 0,
     };
     if (t.sample) clean.sample = true;
+    if (t.fromSavings) clean.fromSavings = true;
     tx.push(clean);
   }
   const limits = (Array.isArray(data.limits) ? data.limits : [])
@@ -390,10 +392,13 @@ function setLimit(amount, period) {
   state.limits.push({ start, amount, period });
 }
 
-function periodTotals() {
+// What came out of each period's jar. Purchases paid from savings don't count:
+// they never touch the jar, the limit or the streak.
+function periodTotals(type = state.period) {
   const totals = new Map();
   for (const t of state.tx) {
-    const start = periodStart(t.date);
+    if (t.fromSavings) continue;
+    const start = periodStart(t.date, type);
     totals.set(start, (totals.get(start) ?? 0) + t.amount);
   }
   return totals;
@@ -416,6 +421,28 @@ function streakInfo(totals) {
     }
   }
   return { current: overNow ? 0 : run, best, overNow };
+}
+
+// Savings: what was left in the jar at the end of every finished period, minus
+// purchases paid from savings. Going over a limit never takes anything out.
+// Each limit counts in its own week or month terms, so switching between weekly
+// and monthly doesn't lose what was already saved.
+function savingsBalance() {
+  const todayISO = today();
+  const totals = { week: periodTotals('week'), month: periodTotals('month') };
+  let saved = 0;
+  state.limits.forEach((entry, i) => {
+    const until = state.limits[i + 1]?.start ?? '9999-12-31';
+    let p = entry.start;
+    for (let guard = 0; guard < 2000; guard++, p = shiftPeriod(p, 1, entry.period)) {
+      const end = periodEnd(p, entry.period);
+      // Stop at a period that hasn't finished, or one a later limit took over.
+      if (end >= todayISO || end >= until) break;
+      saved += Math.max(0, entry.amount - (totals[entry.period].get(p) ?? 0));
+    }
+  });
+  const used = state.tx.reduce((sum, t) => sum + (t.fromSavings ? t.amount : 0), 0);
+  return saved - used;
 }
 
 /* ----------------------------------------------------------------- render */
@@ -455,7 +482,7 @@ function renderHero(totals) {
   $('#streak').hidden = setup;
   if (setup) {
     $('#hero').classList.remove('is-over');
-    setJar(0, null, false);
+    weekJar.set(0, null, false);
     return;
   }
 
@@ -472,7 +499,7 @@ function renderHero(totals) {
     $('#heroLabel').textContent = 'Spent';
     showFigure(spent);
     $('#heroOf').textContent = `You didn't have a ${unit === 'week' ? 'weekly' : 'monthly'} limit yet.`;
-    setJar(0, null, false);
+    weekJar.set(0, null, false);
   } else {
     const left = limit - spent;
     const over = left < 0;
@@ -483,12 +510,12 @@ function renderHero(totals) {
       $('#heroLabel').textContent = 'In the jar';
       $('#heroOf').textContent = `of ${money(limit)}`;
       guide.textContent = `This ${unit} hasn't started yet.`;
-      setJar(1, null, false);
+      weekJar.set(1, null, false);
     } else if (start < now) {
       $('#heroLabel').textContent = over ? 'Went over by' : 'Left over';
       $('#heroOf').textContent = `${money(spent)} spent of ${money(limit)}`;
       guide.textContent = over ? 'That one broke the streak.' : 'You stayed under your limit.';
-      setJar(Math.max(0, left) / limit, null, over);
+      weekJar.set(Math.max(0, left) / limit, null, over);
     } else {
       const end = periodEnd(start);
       const total = daysBetween(start, end) + 1;
@@ -509,10 +536,27 @@ function renderHero(totals) {
           `That's about ${money(Math.floor(left / daysLeft))} a day through ${through}.`;
       }
       // The pace mark shows where the cash should be by the end of today.
-      setJar(Math.max(0, left) / limit, over ? null : 1 - dayIndex / total, over);
+      weekJar.set(Math.max(0, left) / limit, over ? null : 1 - dayIndex / total, over);
     }
   }
+  $('#jarLabel').textContent = periodName(start);
+  renderSavings(totals);
   renderStreak(streakInfo(totals));
+}
+
+// The savings jar uses the same bills as this week's jar (each one is a
+// twentieth of the limit), so leftover bills look like they moved across.
+function renderSavings(totals) {
+  const balance = savingsBalance();
+  const now = currentStart();
+  const limit = limitFor(now);
+  savingsJar.set(limit ? Math.max(0, balance) / limit : 0, null, balance < 0);
+  $('#savingsLabel').classList.toggle('is-negative', balance < 0);
+  $('#savingsAmount').textContent = (balance < 0 ? MINUS : '') + money(balance);
+  const leftNow = limit == null ? 0 : limit - (totals.get(now) ?? 0);
+  $('#savingsNote').textContent = leftNow > 0
+    ? `This ${state.period}'s leftover joins on ${nextStartName(now)}.`
+    : `Nothing to add from this ${state.period}.`;
 }
 
 let displayedFigure = null;
@@ -567,24 +611,22 @@ function fitFigure() {
   }
 }
 
-/* the jar */
+/* the jars */
 
-const JAR = { width: 230, height: 242, bills: 20, floor: 232, ceiling: 96 };
+const JAR = { height: 242, bills: 20, floor: 232, ceiling: 96 };
 const GLASS_PATH = 'M62 40C62 58 26 60 26 90V216Q26 240 50 240H150Q174 240 174 216V90C174 60 138 58 138 40';
-let jarBills = [];
-let jarCount = 0;
-let jarTarget = 0;
-let jarState = 'new'; // new, then waiting for the first frame, then live
+let weekJar = null;
+let savingsJar = null;
 
 // An open mason jar with a pile of bills in it. Each bill is its own element
-// so it can fly out of the jar when you spend and drop back in when it refills.
-function buildJar() {
-  const root = $('#jar');
-  root.setAttribute('viewBox', `0 0 ${JAR.width} ${JAR.height}`);
-  const rand = mulberry32(11);
+// so it can fly out when money leaves the jar and drop back in when it fills.
+// withPace leaves room on the right for the pace mark.
+function createJar(root, { seed, withPace = false }) {
+  root.setAttribute('viewBox', `0 0 ${withPace ? 230 : 200} ${JAR.height}`);
+  const rand = mulberry32(seed);
   const step = (JAR.floor - JAR.ceiling) / JAR.bills;
   const pile = svg('g');
-  jarBills = Array.from({ length: JAR.bills }, (_, i) => {
+  const bills = Array.from({ length: JAR.bills }, (_, i) => {
     const x = 100 + (rand() - 0.5) * 10;
     const y = JAR.floor - i * step - 9;
     const tilt = (rand() - 0.5) * (4 + i * 0.4);
@@ -601,6 +643,11 @@ function buildJar() {
     pile.append(flyer);
     return flyer;
   });
+  const mark = withPace
+    ? svg('g', { class: 'pace-mark', style: 'display:none' },
+      svg('line', { x1: 180, x2: 192, y1: 0, y2: 0 }),
+      svg('text', { class: 'pace-label', x: 197, y: 0, dy: '0.35em', stroke: 'none' }, 'pace'))
+    : null;
   root.replaceChildren(
     svg('path', { class: 'glass-back', d: `${GLASS_PATH}Z` }),
     pile,
@@ -608,42 +655,44 @@ function buildJar() {
     svg('path', { class: 'glass-shine', d: 'M42 110C39 140 39 180 42 212' }),
     svg('rect', { class: 'jar-rim', x: 56, y: 24, width: 88, height: 18, rx: 5 }),
     svg('path', { class: 'jar-thread', d: 'M60 30.5H140M60 36H140' }),
-    svg('g', { class: 'pace-mark', id: 'paceMark', style: 'display:none' },
-      svg('line', { x1: 180, x2: 192, y1: 0, y2: 0 }),
-      svg('text', { class: 'pace-label', x: 197, y: 0, dy: '0.35em', stroke: 'none' }, 'pace')),
+    mark,
   );
-}
 
-// fraction: how full the jar is (0 to 1). pace: where the cash should be by
-// tonight, or null to hide the mark.
-function setJar(fraction, pace, over) {
-  jarTarget = fraction > 0 ? Math.max(1, Math.round(fraction * JAR.bills)) : 0;
-  if (jarState === 'live') {
-    applyJar();
-  } else if (jarState === 'new') {
-    // The first fill waits for a painted frame so the bills visibly drop in when the app opens.
-    jarState = 'waiting';
-    requestAnimationFrame(() => requestAnimationFrame(() => { jarState = 'live'; applyJar(); }));
-  }
+  let count = 0;
+  let target = 0;
+  let phase = 'new'; // new, then waiting for the first frame, then live
+  const apply = () => {
+    const leaving = target < count;
+    bills.forEach((bill, i) => {
+      const show = i < target;
+      if (bill.classList.contains('is-out') !== show) return;
+      // Top bills leave first; refills land from the bottom up.
+      const order = leaving ? count - 1 - i : i - count;
+      bill.style.transitionDelay = `${Math.max(0, order) * (leaving ? 45 : 30)}ms`;
+      bill.classList.toggle('is-out', !show);
+    });
+    count = target;
+  };
 
-  $('#jar').classList.toggle('is-over', over);
-  const mark = $('#paceMark');
-  mark.style.display = pace == null ? 'none' : '';
-  if (pace != null) mark.style.transform = `translateY(${JAR.floor - pace * (JAR.floor - JAR.ceiling)}px)`;
-}
-
-function applyJar() {
-  const target = jarTarget;
-  const leaving = target < jarCount;
-  jarBills.forEach((bill, i) => {
-    const show = i < target;
-    if (bill.classList.contains('is-out') !== show) return;
-    // Top bills leave first; refills land from the bottom up.
-    const order = leaving ? jarCount - 1 - i : i - jarCount;
-    bill.style.transitionDelay = `${Math.max(0, order) * (leaving ? 45 : 30)}ms`;
-    bill.classList.toggle('is-out', !show);
-  });
-  jarCount = target;
+  return {
+    // fraction: how full the jar is (0 to 1). pace: where the cash should be
+    // by tonight, or null to hide the mark. over: outline the glass in red.
+    set(fraction, pace = null, over = false) {
+      target = fraction > 0 ? Math.min(JAR.bills, Math.max(1, Math.round(fraction * JAR.bills))) : 0;
+      if (phase === 'live') {
+        apply();
+      } else if (phase === 'new') {
+        // The first fill waits for a painted frame so the bills visibly drop in when the app opens.
+        phase = 'waiting';
+        requestAnimationFrame(() => requestAnimationFrame(() => { phase = 'live'; apply(); }));
+      }
+      root.classList.toggle('is-over', over);
+      if (mark) {
+        mark.style.display = pace == null ? 'none' : '';
+        if (pace != null) mark.style.transform = `translateY(${JAR.floor - pace * (JAR.floor - JAR.ceiling)}px)`;
+      }
+    },
+  };
 }
 
 /* the streak seal */
@@ -691,8 +740,10 @@ function renderWhere() {
   const spent = new Map();
   const within = periodFilter(view.start);
   let total = 0;
+  let fromSavings = 0;
   for (const t of state.tx) {
     if (!within(t)) continue;
+    if (t.fromSavings) { fromSavings += t.amount; continue; }
     spent.set(t.cat, (spent.get(t.cat) ?? 0) + t.amount);
     total += t.amount;
   }
@@ -701,7 +752,8 @@ function renderWhere() {
     .map(c => ({ cat: c, amount: spent.get(c.id) }))
     .sort((a, b) => b.amount - a.amount || a.cat.name.localeCompare(b.cat.name));
   const phrase = periodPhrase(view.start);
-  $('#whereSub').textContent = total ? `${money(total)} spent ${phrase}, by category.` : '';
+  const savingsLine = fromSavings ? ` Plus ${money(fromSavings)} paid from savings.` : '';
+  $('#whereSub').textContent = total ? `${money(total)} spent ${phrase}, by category.${savingsLine}` : savingsLine.trim();
 
   const max = Math.max(1, ...rows.map(r => r.amount));
   $('#whereList').replaceChildren(...rows.map(({ cat, amount }) => h('li', null,
@@ -719,7 +771,7 @@ function renderWhere() {
 
   const empty = $('#whereEmpty');
   empty.hidden = total > 0;
-  empty.textContent = `Nothing spent ${phrase}${view.start >= currentStart() ? ' yet' : ''}.`;
+  empty.textContent = `Nothing spent ${fromSavings ? 'from the jar ' : ''}${phrase}${view.start >= currentStart() ? ' yet' : ''}.`;
 }
 
 function toggleCategory(id) {
@@ -982,7 +1034,9 @@ function txRow(t, names) {
   },
   h('span', { class: 'tx-main' },
     h('span', { class: 'tx-title' }, t.note || cat),
-    t.note ? h('span', { class: 'tx-cat' }, cat) : null),
+    t.note || t.fromSavings
+      ? h('span', { class: 'tx-cat' }, t.note ? cat : null, t.fromSavings ? h('span', { class: 'tx-tag' }, 'From savings') : null)
+      : null),
   h('span', { class: 'tx-amt' }, money(t.amount)));
 }
 
@@ -1082,6 +1136,10 @@ function openTx(id = null) {
   $('#txDialogTitle').textContent = t ? 'Edit spending' : 'Add spending';
   $('#txSubmit').textContent = t ? 'Save' : 'Add';
   $('#txDelete').hidden = !t;
+  // "Pay from" only means something once there's a limit (and so a jar and savings).
+  $('#txFromField').hidden = !state.limits.length;
+  $('#txFromJar').textContent = state.period === 'week' ? 'Weekly jar' : 'Monthly jar';
+  for (const r of $$('input[name="txFrom"]', txForm)) r.checked = r.value === (t?.fromSavings ? 'savings' : 'jar');
   setAmountError('');
   renderTxCategories(t?.cat ?? view.cat ?? state.lastCat);
   renderNoteSuggestions();
@@ -1162,9 +1220,31 @@ function setAmountError(message) {
   $('#txAmount').setAttribute('aria-invalid', message ? 'true' : 'false');
 }
 
+const payingFromSavings = () => txForm.querySelector('input[name="txFrom"]:checked')?.value === 'savings';
+
+// Savings as they'd be without the purchase being edited.
+function savingsBefore() {
+  const editing = editingId ? state.tx.find(t => t.id === editingId) : null;
+  return savingsBalance() + (editing?.fromSavings ? editing.amount : 0);
+}
+
 // Live preview of what this purchase does to its jar.
 function updateJarHint() {
   const hint = $('#txJarHint');
+  if (state.limits.length && payingFromSavings()) {
+    const typed = parseAmount($('#txAmount').value);
+    const amount = typed > 0 ? typed : 0;
+    const before = savingsBefore();
+    const after = before - amount;
+    if (!amount) {
+      hint.textContent = before > 0
+        ? `${money(before)} in savings.`
+        : `Nothing saved yet. Savings fill up with what's left in the jar at the end of each ${state.period}.`;
+    } else {
+      hint.textContent = after >= 0 ? `Leaves ${money(after)} in savings.` : `That's ${money(-after)} more than you've saved.`;
+    }
+    return;
+  }
   const date = isISODate($('#txDate').value) ? $('#txDate').value : today();
   const start = periodStart(date);
   const limit = limitFor(start);
@@ -1207,6 +1287,8 @@ function submitTx(e) {
   const start = periodStart(date);
   const limit = limitFor(start);
   const spentBefore = spentIn(start, editingId);
+  const fromSavings = state.limits.length > 0 && payingFromSavings();
+  const savedBefore = savingsBefore();
 
   const existing = editingId ? state.tx.find(t => t.id === editingId) : null;
   let id;
@@ -1217,6 +1299,9 @@ function submitTx(e) {
     id = newId();
     state.tx.push({ id, amount, cat, date, note, created: Date.now() });
   }
+  const record = existing ?? state.tx[state.tx.length - 1];
+  if (fromSavings) record.fromSavings = true;
+  else delete record.fromSavings;
   state.lastCat = cat;
   save();
   // If the button that opened the sheet is gone after re-rendering, focus lands on this row.
@@ -1230,6 +1315,9 @@ function submitTx(e) {
       goPeriod(start);
       focusByKey(`tx:${id}`);
     });
+  } else if (fromSavings) {
+    const after = savedBefore - amount;
+    toast(after >= 0 ? `${money(after)} left in savings` : `That's ${money(-after)} more than you'd saved`);
   } else if (limit != null && start === currentStart()) {
     const left = limit - spentBefore - amount;
     if (left >= 0) toast(`${money(left)} left this ${state.period}`);
@@ -1411,10 +1499,11 @@ function exportCsv() {
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const names = new Map(state.categories.map(c => [c.id, c.name]));
-  const rows = [['Date', 'Category', `Amount (${state.currency})`, 'Note'].map(cell).join(',')];
+  const rows = [['Date', 'Category', `Amount (${state.currency})`, 'Paid from', 'Note'].map(cell).join(',')];
   const sorted = [...state.tx].sort((a, b) => a.date.localeCompare(b.date) || a.created - b.created);
   for (const t of sorted) {
-    rows.push([cell(t.date), cell(names.get(t.cat) ?? 'Other'), (t.amount / 100).toFixed(2), cell(t.note)].join(','));
+    rows.push([cell(t.date), cell(names.get(t.cat) ?? 'Other'), (t.amount / 100).toFixed(2),
+      t.fromSavings ? 'Savings' : 'Jar', cell(t.note)].join(','));
   }
   download(`spendings-tracker-${today()}.csv`, `﻿${rows.join('\r\n')}\r\n`, 'text/csv;charset=utf-8');
   setDataMsg(`Exported ${plural(state.tx.length, 'purchase')} as a spreadsheet file.`);
@@ -1524,6 +1613,13 @@ function loadSample() {
   const total = daysBetween(now, periodEnd(now)) + 1;
   const elapsed = daysBetween(now, today()) + 1;
   state.tx.push(...samplePeriod(now, limit * 0.82 * (elapsed / total), rand));
+  // One treat bought with savings, so the savings jar shows both directions.
+  const treat = parseDate(shiftPeriod(now, -2));
+  treat.setDate(treat.getDate() + 3);
+  state.tx.push({
+    id: newId(), amount: Math.round(limit * 0.36), cat: 'entertainment', date: isoDate(treat),
+    note: 'Concert tickets', created: Date.now(), sample: true, fromSavings: true,
+  });
   state.lastSeen = now;
   view.start = now;
   save();
@@ -1568,7 +1664,7 @@ function hideToast() {
 }
 
 // When a new week or month has started since you last looked, say how the
-// last one went: that's when the streak grows.
+// last one went: that's when the streak grows and the leftover is saved.
 function greetNewPeriod() {
   const now = currentStart();
   const seen = state.lastSeen;
@@ -1581,9 +1677,10 @@ function greetNewPeriod() {
   const spent = spentIn(prev);
   const unit = state.period;
   const { current } = streakInfo(periodTotals());
-  toast(spent <= limit
-    ? `Last ${unit} you stayed ${money(limit - spent)} under. Streak: ${plural(current, unit)}.`
-    : `Last ${unit} went ${money(spent - limit)} over. Fresh jar this ${unit}.`);
+  const streak = `Streak: ${plural(current, unit)}.`;
+  if (spent < limit) toast(`Last ${unit}'s leftover ${money(limit - spent)} went into savings. ${streak}`);
+  else if (spent === limit) toast(`Last ${unit} you used exactly your limit. ${streak}`);
+  else toast(`Last ${unit} went ${money(spent - limit)} over. Fresh jar this ${unit}.`);
 }
 
 /* ---------------------------------------------------------- theme, install */
@@ -1628,7 +1725,8 @@ function init() {
   view.start = currentStart();
   setupFormatters();
   applyTheme();
-  buildJar();
+  weekJar = createJar($('#jar'), { seed: 11, withPace: true });
+  savingsJar = createJar($('#savingsJar'), { seed: 29 });
   buildSeal();
   render();
 
@@ -1657,7 +1755,7 @@ function init() {
   txForm.addEventListener('submit', submitTx);
   txForm.addEventListener('change', e => {
     if (e.target.name === 'txCat') categoryTouched = true;
-    if (e.target.id === 'txDate') updateJarHint();
+    if (e.target.id === 'txDate' || e.target.name === 'txFrom') updateJarHint();
   });
   $('#txAmount').addEventListener('input', () => { setAmountError(''); updateJarHint(); });
   // Typing a note you've used before picks the category you used with it.

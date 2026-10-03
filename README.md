@@ -3,6 +3,7 @@
 A cash jar for your spending. Set a limit for the week or the month and the jar fills with that much cash. Every purchase you log takes bills out of it. Finish the week (or month) under your limit and your streak grows; go over and it starts again.
 
 - **See what's left at a glance.** The jar empties as you spend, and a pace mark on the glass shows where your cash should be by today. You also get a daily figure, like "about $38 a day through Saturday".
+- **Save what's left.** Whatever is still in the jar when the week (or month) ends drops into a savings jar beside it. Buy something with it by switching a purchase to "Pay from: Savings"; that never touches your weekly limit or your streak.
 - **Keep a streak.** Every week or month you finish under the limit adds one. The past-weeks chart shows which ones went over.
 - **Private.** Everything is saved in your browser, on your device. Nothing is sent to a server, and none of it is stored in this repository.
 - **Works offline.** Install it to your phone's home screen or your desktop and it opens like an app.

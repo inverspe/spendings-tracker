@@ -56,12 +56,12 @@
 <!-- splash:end -->
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="styles.css?v=5">
+<link rel="stylesheet" href="styles.css?v=6">
 <!-- The typeface loads without holding up the first paint: text shows in the system font
      and swaps when Archivo arrives. crossorigin lets the service worker keep a copy. -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" media="print" onload="this.media='all'" crossorigin>
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" crossorigin></noscript>
-<script src="app.js?v=5" defer></script>
+<script src="app.js?v=6" defer></script>
 </head>
 <body>
 
@@ -102,8 +102,6 @@
 
   <section class="hero" id="hero" aria-labelledby="heroLabel">
     <div class="hero-main">
-      <svg class="jar" id="jar" viewBox="0 0 230 250" aria-hidden="true"></svg>
-
       <div class="hero-text" id="heroText" tabindex="-1">
         <p class="hero-label" id="heroLabel"></p>
         <p class="hero-figure">
@@ -116,7 +114,7 @@
 
       <form class="setup" id="setupForm" novalidate hidden>
         <h2 class="setup-title" id="setupTitle">Set your spending limit</h2>
-        <p class="setup-text">Your jar fills with this much cash. Everything you spend takes some out. Finish under the limit to start a streak.</p>
+        <p class="setup-text">Your jar fills with this much cash, and everything you spend takes some out. Whatever is left at the end goes into your savings jar, and finishing under the limit starts a streak.</p>
         <div class="limit-row">
           <div class="amount-input amount-compact">
             <span class="amount-cur" data-currency aria-hidden="true"></span>
@@ -133,6 +131,19 @@
           <button class="btn btn-ghost" type="button" id="setupSample">Explore with sample data</button>
         </div>
       </form>
+    </div>
+
+    <!-- The shelf: this week's jar, and the savings jar its leftovers drop into when the week ends. -->
+    <div class="shelf">
+      <svg class="jar" id="jar" aria-hidden="true"></svg>
+      <svg class="jar jar-savings" id="savingsJar" aria-hidden="true"></svg>
+      <div class="shelf-line" aria-hidden="true"></div>
+      <p class="shelf-label" id="jarLabel"></p>
+      <p class="shelf-label shelf-label-savings" id="savingsLabel">
+        <span>Savings</span>
+        <strong id="savingsAmount"></strong>
+        <span class="shelf-note" id="savingsNote"></span>
+      </p>
     </div>
 
     <div class="streak" id="streak">
@@ -204,8 +215,16 @@
           <input id="txAmount" inputmode="decimal" autocomplete="off" aria-describedby="txAmountError txJarHint">
         </div>
         <p class="field-error" id="txAmountError" hidden></p>
-        <p class="hint" id="txJarHint"></p>
       </div>
+
+      <fieldset class="field" id="txFromField">
+        <legend>Pay from</legend>
+        <div class="seg seg-wide" role="radiogroup" aria-label="Pay from">
+          <label><input type="radio" name="txFrom" value="jar" checked><span id="txFromJar">This week</span></label>
+          <label><input type="radio" name="txFrom" value="savings"><span>Savings</span></label>
+        </div>
+        <p class="hint" id="txJarHint"></p>
+      </fieldset>
 
       <fieldset class="field">
         <legend>Category</legend>

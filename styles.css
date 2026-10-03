@@ -270,6 +270,9 @@ ul { padding: 0; list-style: none; }
   box-shadow: 0 1px 2px rgba(19, 36, 28, .12), 0 0 0 1px var(--line);
 }
 .seg input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
+.seg-wide { display: flex; }
+.seg-wide label { flex: 1; }
+.seg-wide span { padding: 9px 12px; font-size: 15px; }
 
 /* text inputs */
 :where(input:not([type="radio"], [type="checkbox"], [type="file"]), select) {
@@ -434,13 +437,30 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 
 /* ---------- the jar ---------- */
 
-.hero-main {
+.hero-main { display: grid; gap: 12px; }
+
+/* The shelf: this period's jar and the smaller savings jar stand on one line,
+   each labelled underneath. Leftover cash moves from the first to the second. */
+.shelf {
+  --jar-w: 150px;
+  --savings-w: 104px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: var(--jar-w) var(--savings-w) minmax(0, 1fr);
   align-items: end;
-  gap: 12px 18px;
+  column-gap: 8px;
+  margin-top: 22px;
 }
-.jar { display: block; width: 132px; height: auto; overflow: visible; }
+.jar { display: block; width: 100%; height: auto; overflow: visible; grid-row: 1; }
+#jar { grid-column: 1; }
+#savingsJar { grid-column: 2; }
+.shelf-line { grid-column: 1 / -1; grid-row: 2; height: 2px; background: var(--line-strong); }
+.shelf-label { grid-row: 3; align-self: start; padding: 8px 0 0 12px; color: var(--ink-2); font-size: 14px; }
+.shelf-label-savings { grid-column: 2 / -1; padding-left: 10px; }
+.shelf-label-savings strong { margin-left: 4px; color: var(--ink); font-size: 16px; font-weight: 650; }
+.shelf-label-savings.is-negative strong { color: var(--crit-text); }
+.shelf-note { display: block; color: var(--ink-3); font-size: 13px; }
+.hero.is-setup #savingsJar,
+.hero.is-setup .shelf-label { display: none; }
 
 .glass-back { fill: var(--glass); }
 .glass-front, .jar-rim {
@@ -470,7 +490,7 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 .pace-mark { stroke: var(--ink-2); stroke-width: 2; stroke-linecap: round; transition: transform .5s; }
 .pace-label { fill: var(--ink-2); font-size: 13px; font-weight: 500; }
 
-.hero-text { min-width: 0; padding-bottom: 10px; }
+.hero-text { min-width: 0; }
 .hero-label { color: var(--ink-2); font-size: 15px; font-weight: 500; }
 .figure {
   display: block;
@@ -495,21 +515,15 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 .hero-guide { max-width: 38ch; margin-top: 12px; font-size: 15px; }
 .hero-guide .i { width: 18px; height: 18px; margin: 0 4px -3px 0; color: var(--crit-text); stroke-width: 2; }
 
-.setup { display: grid; gap: 12px; padding-bottom: 10px; }
-@media (max-width: 559px) {
-  .hero.is-setup .hero-main { grid-template-columns: minmax(0, 1fr); }
-  .hero.is-setup .jar { width: 104px; }
-}
+.setup { display: grid; gap: 12px; }
 .setup-title { font-size: 22px; line-height: 1.25; font-weight: 650; font-stretch: 112%; letter-spacing: -.01em; }
 .setup-text { max-width: 44ch; color: var(--ink-2); font-size: 15px; }
 
-/* the shelf the jar stands on, and the streak on it */
 .streak {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding-top: 16px;
-  border-top: 2px solid var(--line-strong);
+  margin-top: 20px;
 }
 .seal { width: 64px; height: 64px; flex: none; overflow: visible; }
 .seal-edge { fill: var(--brand); }
@@ -699,6 +713,19 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 .tx-main { display: grid; flex: 1; min-width: 0; }
 .tx-title { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .tx-cat { color: var(--ink-3); font-size: 13px; }
+.tx-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--brand-soft);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  vertical-align: 1px;
+}
+.tx-tag:first-child { margin-left: 0; }
 .tx-amt { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .empty-block { display: grid; justify-items: start; gap: 12px; padding: 20px 0 8px; }
@@ -869,8 +896,7 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 /* ---------- wider screens ---------- */
 
 @media (min-width: 560px) {
-  .jar { width: 176px; }
-  .hero-main { gap: 12px 28px; }
+  .shelf { --jar-w: 176px; --savings-w: 120px; }
 }
 
 @media (min-width: 640px) {

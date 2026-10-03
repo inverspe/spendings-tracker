@@ -5,7 +5,7 @@
 // used to mean seconds of blank screen). Changing CACHE below installs a whole
 // new set of files at once and tells the open page, which offers a reload.
 
-const CACHE = 'money-tracker-v5';
+const CACHE = 'money-tracker-v6';
 const FONT_CACHE = 'money-tracker-fonts';
 const APP_FILES = [
   './',
