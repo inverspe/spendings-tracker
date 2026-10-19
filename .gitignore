@@ -5,3 +5,6 @@
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# launch video renders (large, not part of the app)
+brag-output*/

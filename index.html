@@ -56,12 +56,12 @@
 <!-- splash:end -->
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="styles.css?v=6">
+<link rel="stylesheet" href="styles.css?v=7">
 <!-- The typeface loads without holding up the first paint: text shows in the system font
      and swaps when Archivo arrives. crossorigin lets the service worker keep a copy. -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" media="print" onload="this.media='all'" crossorigin>
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" crossorigin></noscript>
-<script src="app.js?v=6" defer></script>
+<script src="app.js?v=7" defer></script>
 </head>
 <body>
 
@@ -139,11 +139,12 @@
       <svg class="jar jar-savings" id="savingsJar" aria-hidden="true"></svg>
       <div class="shelf-line" aria-hidden="true"></div>
       <p class="shelf-label" id="jarLabel"></p>
-      <p class="shelf-label shelf-label-savings" id="savingsLabel">
+      <div class="shelf-label shelf-label-savings" id="savingsLabel">
         <span>Savings</span>
         <strong id="savingsAmount"></strong>
         <span class="shelf-note" id="savingsNote"></span>
-      </p>
+        <button class="text-btn shelf-action" type="button" id="topupOpen" hidden></button>
+      </div>
     </div>
 
     <div class="streak" id="streak">
@@ -243,6 +244,30 @@
       </div>
 
       <button class="btn btn-danger sheet-delete" type="button" id="txDelete" hidden>Delete this purchase</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Moving money from savings into this week's jar. -->
+<dialog class="sheet" id="topupDialog" aria-labelledby="topupTitle">
+  <form id="topupForm" novalidate>
+    <header class="sheet-head sheet-bar">
+      <button class="text-btn" type="button" data-close>Cancel</button>
+      <h2 id="topupTitle">Add from savings</h2>
+      <button class="btn btn-primary" type="submit" id="topupSubmit">Add</button>
+    </header>
+    <div class="sheet-body">
+      <div class="field">
+        <label for="topupAmount">Amount</label>
+        <div class="amount-input">
+          <span class="amount-cur" data-currency aria-hidden="true"></span>
+          <input id="topupAmount" inputmode="decimal" autocomplete="off" aria-describedby="topupError topupHint">
+        </div>
+        <p class="field-error" id="topupError" hidden></p>
+        <p class="hint" id="topupHint"></p>
+      </div>
+      <div class="quick-row" id="topupQuick"></div>
+      <button class="btn btn-ghost sheet-delete" type="button" id="topupRemove" hidden>Put it back in savings</button>
     </div>
   </form>
 </dialog>

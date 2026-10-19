@@ -281,6 +281,8 @@ function freshState() {
     theme: 'system',
     categories: DEFAULT_CATEGORIES.map(([id, name]) => ({ id, name })),
     tx: [],
+    // Money moved from savings into a week's (or month's) jar.
+    topups: [],
     lastCat: null,
     lastBackup: null,
     backupNag: null,
@@ -326,6 +328,15 @@ function normalize(data) {
     .filter(e => e && isISODate(e.start) && Number.isInteger(e.amount) && e.amount > 0 && ['week', 'month'].includes(e.period))
     .map(e => ({ start: e.start, amount: e.amount, period: e.period, ...(e.sample ? { sample: true } : {}) }))
     .sort((a, b) => a.start.localeCompare(b.start));
+  const topups = (Array.isArray(data.topups) ? data.topups : [])
+    .filter(m => m && Number.isInteger(m.amount) && m.amount > 0 && isISODate(m.date))
+    .map(m => ({
+      id: typeof m.id === 'string' && m.id ? m.id : newId(),
+      amount: m.amount,
+      date: m.date,
+      created: Number(m.created) || 0,
+      ...(m.sample ? { sample: true } : {}),
+    }));
   return {
     v: 2,
     currency: isCurrency(data.currency) ? data.currency : guessCurrency(),
@@ -335,6 +346,7 @@ function normalize(data) {
     theme: ['system', 'light', 'dark'].includes(data.theme) ? data.theme : 'system',
     categories,
     tx,
+    topups,
     lastCat: ids.has(data.lastCat) ? data.lastCat : null,
     lastBackup: typeof data.lastBackup === 'string' ? data.lastBackup : null,
     backupNag: typeof data.backupNag === 'string' ? data.backupNag : null,
@@ -404,19 +416,39 @@ function periodTotals(type = state.period) {
   return totals;
 }
 
-// The streak counts finished periods in a row that stayed at or under their
-// limit. Going over in the current period resets it straight away.
+// Money moved from savings into each period's jar.
+function topupTotals(type = state.period, topups = state.topups) {
+  const totals = new Map();
+  for (const m of topups) {
+    const start = periodStart(m.date, type);
+    totals.set(start, (totals.get(start) ?? 0) + m.amount);
+  }
+  return totals;
+}
+
+// What a period's jar held: its limit plus anything moved in from savings.
+// Staying within it keeps the streak, the same as paying from savings never hurts it.
+function jarFor(start, topups = topupTotals()) {
+  const limit = limitFor(start);
+  return limit == null ? null : limit + (topups.get(start) ?? 0);
+}
+
+const currentJar = () => jarFor(currentStart());
+
+// The streak counts finished periods in a row that stayed within their jar.
+// Going over in the current period resets it straight away.
 function streakInfo(totals) {
   const now = currentStart();
-  const limitNow = limitFor(now);
-  const overNow = limitNow != null && (totals.get(now) ?? 0) > limitNow;
+  const topups = topupTotals();
+  const jarNow = jarFor(now, topups);
+  const overNow = jarNow != null && (totals.get(now) ?? 0) > jarNow;
   let run = 0;
   let best = 0;
   if (state.limits.length) {
     let p = periodStart(state.limits[0].start);
     for (let guard = 0; p < now && guard < 2000; guard++, p = shiftPeriod(p, 1)) {
-      const limit = limitFor(p);
-      run = limit != null && (totals.get(p) ?? 0) <= limit ? run + 1 : 0;
+      const jar = jarFor(p, topups);
+      run = jar != null && (totals.get(p) ?? 0) <= jar ? run + 1 : 0;
       best = Math.max(best, run);
     }
   }
@@ -424,12 +456,14 @@ function streakInfo(totals) {
 }
 
 // Savings: what was left in the jar at the end of every finished period, minus
-// purchases paid from savings. Going over a limit never takes anything out.
-// Each limit counts in its own week or month terms, so switching between weekly
-// and monthly doesn't lose what was already saved.
-function savingsBalance() {
+// money moved back into a jar and purchases paid from savings. Going over a
+// limit never takes anything out. Each limit counts in its own week or month
+// terms, so switching between weekly and monthly doesn't lose what was saved.
+// `topups` lets the add-from-savings sheet try out a change before making it.
+function savingsBalance(topups = state.topups) {
   const todayISO = today();
   const totals = { week: periodTotals('week'), month: periodTotals('month') };
+  const movedIn = { week: topupTotals('week', topups), month: topupTotals('month', topups) };
   let saved = 0;
   state.limits.forEach((entry, i) => {
     const until = state.limits[i + 1]?.start ?? '9999-12-31';
@@ -438,11 +472,13 @@ function savingsBalance() {
       const end = periodEnd(p, entry.period);
       // Stop at a period that hasn't finished, or one a later limit took over.
       if (end >= todayISO || end >= until) break;
-      saved += Math.max(0, entry.amount - (totals[entry.period].get(p) ?? 0));
+      const jar = entry.amount + (movedIn[entry.period].get(p) ?? 0);
+      saved += Math.max(0, jar - (totals[entry.period].get(p) ?? 0));
     }
   });
+  const moved = topups.reduce((sum, m) => sum + m.amount, 0);
   const used = state.tx.reduce((sum, t) => sum + (t.fromSavings ? t.amount : 0), 0);
-  return saved - used;
+  return saved - moved - used;
 }
 
 /* ----------------------------------------------------------------- render */
@@ -491,6 +527,7 @@ function renderHero(totals) {
   const now = currentStart();
   const limit = limitFor(start);
   const spent = totals.get(start) ?? 0;
+  const balance = savingsBalance();
   const guide = $('#heroGuide');
   guide.replaceChildren();
 
@@ -501,62 +538,79 @@ function renderHero(totals) {
     $('#heroOf').textContent = `You didn't have a ${unit === 'week' ? 'weekly' : 'monthly'} limit yet.`;
     weekJar.set(0, null, false);
   } else {
-    const left = limit - spent;
+    const topup = topupTotals().get(start) ?? 0;
+    const jar = limit + topup;
+    const left = jar - spent;
     const over = left < 0;
+    // "of $300.00", or "of $300.00 + $40.00 from savings" once money has been moved in.
+    const ofJar = topup ? `${money(limit)} + ${money(topup)} from savings` : money(limit);
+    // Each bill is a twentieth of the limit, the same bills as in the savings jar.
+    const fill = Math.max(0, left) / limit;
     $('#hero').classList.toggle('is-over', over);
     showFigure(Math.abs(left));
 
     if (start > now) {
       $('#heroLabel').textContent = 'In the jar';
-      $('#heroOf').textContent = `of ${money(limit)}`;
+      $('#heroOf').textContent = `of ${ofJar}`;
       guide.textContent = `This ${unit} hasn't started yet.`;
-      weekJar.set(1, null, false);
+      weekJar.set(fill, null, false);
     } else if (start < now) {
       $('#heroLabel').textContent = over ? 'Went over by' : 'Left over';
-      $('#heroOf').textContent = `${money(spent)} spent of ${money(limit)}`;
+      $('#heroOf').textContent = `${money(spent)} spent of ${ofJar}`;
       guide.textContent = over ? 'That one broke the streak.' : 'You stayed under your limit.';
-      weekJar.set(Math.max(0, left) / limit, null, over);
+      weekJar.set(fill, null, over);
     } else {
       const end = periodEnd(start);
       const total = daysBetween(start, end) + 1;
       const dayIndex = daysBetween(start, today()) + 1;
       const daysLeft = total - dayIndex + 1;
       $('#heroLabel').textContent = over ? 'Over your limit' : `Left this ${unit}`;
-      $('#heroOf').textContent = over ? `${money(spent)} spent of ${money(limit)}` : `of ${money(limit)}`;
+      $('#heroOf').textContent = over ? `${money(spent)} spent of ${ofJar}` : `of ${ofJar}`;
       if (over) {
         guide.append(icon('alert'), `Your streak resets. The jar refills on ${nextStartName(start)}.`);
+        // Savings can cover the overspend and keep the streak going.
+        if (balance > 0) {
+          guide.append(' ', h('button', {
+            class: 'link-btn', type: 'button',
+            onclick: () => openTopup({ prefill: Math.min(-left, balance) }),
+          }, balance >= -left ? 'Cover it from savings' : `Cover ${money(balance)} of it from savings`));
+        }
       } else if (left === 0) {
         guide.textContent = `The jar is empty. Anything more goes over your limit until ${nextStartName(start)}.`;
       } else if (daysLeft === 1) {
         guide.textContent = `${money(left)} to spend today, the last day of the ${unit}.`;
       } else {
-        const onPace = spent <= (limit * dayIndex) / total;
+        const onPace = spent <= (jar * dayIndex) / total;
         const through = unit === 'week' ? fmtWeekday.format(parseDate(end)) : fmtDayLongMonth.format(parseDate(end));
         guide.textContent = `${onPace ? "You're on pace." : "You're spending faster than planned."} ` +
           `That's about ${money(Math.floor(left / daysLeft))} a day through ${through}.`;
       }
       // The pace mark shows where the cash should be by the end of today.
-      weekJar.set(Math.max(0, left) / limit, over ? null : 1 - dayIndex / total, over);
+      weekJar.set(fill, over ? null : Math.min(1, (jar * (1 - dayIndex / total)) / limit), over);
     }
   }
   $('#jarLabel').textContent = periodName(start);
-  renderSavings(totals);
+  renderSavings(totals, balance);
   renderStreak(streakInfo(totals));
 }
 
 // The savings jar uses the same bills as this week's jar (each one is a
 // twentieth of the limit), so leftover bills look like they moved across.
-function renderSavings(totals) {
-  const balance = savingsBalance();
+function renderSavings(totals, balance = savingsBalance()) {
   const now = currentStart();
   const limit = limitFor(now);
   savingsJar.set(limit ? Math.max(0, balance) / limit : 0, null, balance < 0);
   $('#savingsLabel').classList.toggle('is-negative', balance < 0);
   $('#savingsAmount').textContent = (balance < 0 ? MINUS : '') + money(balance);
-  const leftNow = limit == null ? 0 : limit - (totals.get(now) ?? 0);
+  const jar = jarFor(now);
+  const leftNow = jar == null ? 0 : jar - (totals.get(now) ?? 0);
   $('#savingsNote').textContent = leftNow > 0
     ? `This ${state.period}'s leftover joins on ${nextStartName(now)}.`
-    : `Nothing to add from this ${state.period}.`;
+    : `Nothing left to save this ${state.period}.`;
+  // Moving savings into a jar only makes sense for the week (or month) you're in.
+  const button = $('#topupOpen');
+  button.hidden = !(limit != null && balance > 0 && view.start === now);
+  button.replaceChildren(icon('plus'), `Add to this ${state.period}`);
 }
 
 let displayedFigure = null;
@@ -713,7 +767,7 @@ function buildSeal() {
 
 function renderStreak({ current, best, overNow }) {
   const unit = state.period;
-  const limit = currentLimit();
+  const limit = currentJar();
   $('#seal').classList.toggle('is-empty', current === 0);
   $('#sealNum').textContent = String(current);
   const bestLine = best > current ? ` Your best is ${best}.` : '';
@@ -808,18 +862,23 @@ function columnPath(x, y, w, height, r) {
     `H${f(x + w - r)}A${f(r)},${f(r)} 0 0 1 ${f(x + w)},${f(y + r)}V${f(y + height)}Z`;
 }
 
+// Each row's limit is the whole jar: the limit plus anything moved in from savings.
 function historyRows(totals) {
   const count = state.period === 'week' ? 8 : 6;
+  const topups = topupTotals();
   return Array.from({ length: count }, (_, i) => {
     const start = shiftPeriod(view.start, i - count + 1);
-    return { start, spent: totals.get(start) ?? 0, limit: limitFor(start) };
+    return { start, spent: totals.get(start) ?? 0, limit: jarFor(start, topups), topup: topups.get(start) ?? 0 };
   });
 }
 
 function verdict(r) {
   if (r.limit == null) return 'No limit set';
   const diff = r.limit - r.spent;
-  return diff >= 0 ? `${money(diff)} under the ${money(r.limit)} limit` : `${money(-diff)} over the ${money(r.limit)} limit`;
+  const from = r.topup ? `, with ${money(r.topup)} from savings` : '';
+  return diff >= 0
+    ? `${money(diff)} under the ${money(r.limit)} limit${from}`
+    : `${money(-diff)} over the ${money(r.limit)} limit${from}`;
 }
 
 function renderHistory(totals) {
@@ -968,7 +1027,7 @@ function historyTable(rows) {
       return h('tr', { class: r.start === view.start ? 'is-current' : null },
         h('th', { scope: 'row' }, state.period === 'week' ? rangeLabel(r.start) : fmtMonthYear.format(parseDate(r.start))),
         h('td', null, money(r.spent)),
-        h('td', null, r.limit == null ? 'None' : money(r.limit)),
+        h('td', null, r.limit == null ? 'None' : r.topup ? `${money(r.limit - r.topup)} + ${money(r.topup)}` : money(r.limit)),
         h('td', { class: over ? 'is-over' : null },
           r.limit == null ? '' : over ? `${money(r.spent - r.limit)} over` : `${money(r.limit - r.spent)} under`));
     })));
@@ -979,12 +1038,18 @@ function historyTable(rows) {
 function renderList() {
   const box = $('#txList');
   const names = new Map(state.categories.map(c => [c.id, c.name]));
-  const inView = state.tx.filter(periodFilter(view.start));
+  const within = periodFilter(view.start);
+  const inView = state.tx.filter(within);
+  // Money moved in from savings is listed too, so it can be changed or undone.
+  const movesInView = state.topups.filter(within);
   const q = view.query.trim().toLocaleLowerCase();
-  const items = inView
-    .filter(t => !view.cat || t.cat === view.cat)
-    .filter(t => !q || t.note.toLocaleLowerCase().includes(q) || (names.get(t.cat) ?? '').toLocaleLowerCase().includes(q))
-    .sort((a, b) => b.date.localeCompare(a.date) || b.created - a.created);
+  const items = [
+    ...inView
+      .filter(t => !view.cat || t.cat === view.cat)
+      .filter(t => !q || t.note.toLocaleLowerCase().includes(q) || (names.get(t.cat) ?? '').toLocaleLowerCase().includes(q))
+      .map(t => ({ kind: 'tx', t })),
+    ...(view.cat ? [] : movesInView.filter(() => !q || moveText().join(' ').toLocaleLowerCase().includes(q)).map(t => ({ kind: 'move', t }))),
+  ].sort((a, b) => b.t.date.localeCompare(a.t.date) || b.t.created - a.t.created);
 
   const chip = $('#activeFilter');
   chip.hidden = !view.cat;
@@ -994,7 +1059,7 @@ function renderList() {
     onclick: () => { view.cat = null; render(); $('#txTitle').focus(); },
   }, names.get(view.cat) ?? 'Category', icon('close'))] : []));
 
-  if (!inView.length) {
+  if (!inView.length && !movesInView.length) {
     box.replaceChildren(h('div', { class: 'empty-block' },
       h('p', { class: 'empty' }, state.limits.length
         ? `Nothing logged ${periodPhrase(view.start)}. Every purchase you add takes cash out of the jar.`
@@ -1012,16 +1077,37 @@ function renderList() {
   }
 
   const days = new Map();
-  for (const t of items) {
-    if (!days.has(t.date)) days.set(t.date, []);
-    days.get(t.date).push(t);
+  for (const item of items) {
+    if (!days.has(item.t.date)) days.set(item.t.date, []);
+    days.get(item.t.date).push(item);
   }
-  box.replaceChildren(...Array.from(days, ([date, list]) => h('section', { class: 'day' },
-    h('h3', { class: 'day-head' },
-      h('span', null, dayLabel(date)),
-      h('span', { class: 'day-total' }, money(list.reduce((sum, t) => sum + t.amount, 0)))),
-    h('ul', { class: 'tx-items' }, list.map(t => h('li', null, txRow(t, names)))))));
+  box.replaceChildren(...Array.from(days, ([date, list]) => {
+    // The day's total is what was spent; money moved in from savings isn't spending.
+    const spent = list.reduce((sum, item) => sum + (item.kind === 'tx' ? item.t.amount : 0), 0);
+    return h('section', { class: 'day' },
+      h('h3', { class: 'day-head' },
+        h('span', null, dayLabel(date)),
+        h('span', { class: 'day-total' }, spent ? money(spent) : '')),
+      h('ul', { class: 'tx-items' }, list.map(item => h('li', null, item.kind === 'tx' ? txRow(item.t, names) : moveRow(item.t)))));
+  }));
   highlightId = null;
+}
+
+// A move's title and subtitle in the list (search matches them too).
+const moveText = () => ['Added from savings', `Into the ${state.period === 'week' ? 'weekly' : 'monthly'} jar`];
+
+function moveRow(m) {
+  const [title, sub] = moveText();
+  return h('button', {
+    class: `tx${m.id === highlightId ? ' is-new' : ''}`,
+    type: 'button',
+    dataset: { key: `move:${m.id}` },
+    onclick: () => openTopup({ id: m.id }),
+  },
+  h('span', { class: 'tx-main' },
+    h('span', { class: 'tx-title' }, title),
+    h('span', { class: 'tx-cat' }, sub)),
+  h('span', { class: 'tx-amt is-in' }, `+${money(m.amount)}`));
 }
 
 function txRow(t, names) {
@@ -1247,7 +1333,7 @@ function updateJarHint() {
   }
   const date = isISODate($('#txDate').value) ? $('#txDate').value : today();
   const start = periodStart(date);
-  const limit = limitFor(start);
+  const limit = jarFor(start);
   if (limit == null) { hint.textContent = ''; return; }
   const others = spentIn(start, editingId);
   const typed = parseAmount($('#txAmount').value);
@@ -1285,7 +1371,7 @@ function submitTx(e) {
   const date = isISODate($('#txDate').value) ? $('#txDate').value : today();
   const note = $('#txNote').value.trim().slice(0, 120);
   const start = periodStart(date);
-  const limit = limitFor(start);
+  const limit = jarFor(start);
   const spentBefore = spentIn(start, editingId);
   const fromSavings = state.limits.length > 0 && payingFromSavings();
   const savedBefore = savingsBefore();
@@ -1341,6 +1427,181 @@ function deleteTx() {
   });
 }
 
+/* ------------------------------------------------------- add from savings */
+
+const topupDialog = $('#topupDialog');
+const topupForm = $('#topupForm');
+let topupEditing = null;
+let topupReturnKey = null;
+
+// Every move from savings, with the one in the sheet set to `amount` (left out at 0).
+function topupsWith(amount) {
+  const others = state.topups.filter(m => m !== topupEditing);
+  return amount > 0 ? [...others, { amount, date: topupEditing?.date ?? today() }] : others;
+}
+
+// Savings, and what's left in the jar, if the move in the sheet were `amount`.
+function topupOutcome(amount) {
+  const topups = topupsWith(amount);
+  const start = periodStart(topupEditing?.date ?? today());
+  const jar = jarFor(start, topupTotals(state.period, topups));
+  return { start, savings: savingsBalance(topups), left: jar == null ? null : jar - spentIn(start) };
+}
+
+// A move can't take savings below zero (or further below, if paying for
+// something from savings already did). Says what's wrong with `amount`, if anything.
+function topupProblem(amount, before = topupOutcome(0)) {
+  if (!(amount > 0)) return 'Enter an amount greater than zero.';
+  if (amount >= 1e13) return 'That amount is too large.';
+  if (topupOutcome(amount).savings < Math.min(0, before.savings)) {
+    return before.savings > 0 ? `You only have ${money(before.savings)} in savings.` : "There's nothing in savings to move.";
+  }
+  return '';
+}
+
+function openTopup({ id = null, prefill = 0 } = {}) {
+  const m = id ? state.topups.find(x => x.id === id) : null;
+  topupEditing = m ?? null;
+  topupReturnKey = m ? `move:${m.id}` : null;
+  $('#topupTitle').textContent = m ? 'Added from savings' : 'Add from savings';
+  $('#topupSubmit').textContent = m ? 'Save' : 'Add';
+  $('#topupRemove').hidden = !m;
+  $('#topupAmount').value = m ? amountForInput(m.amount) : prefill > 0 ? amountForInput(prefill) : '';
+  setTopupError('');
+  renderTopupQuick();
+  updateTopupHint();
+  showSheet(topupDialog);
+  // A filled-in amount only needs a tap on Add, so keep the keyboard away for that.
+  if (!m && !(prefill > 0)) $('#topupAmount').focus({ preventScroll: true });
+}
+
+function setTopupError(message) {
+  const el = $('#topupError');
+  el.textContent = message;
+  el.hidden = !message;
+  $('#topupAmount').setAttribute('aria-invalid', message ? 'true' : 'false');
+}
+
+// One-tap amounts for the week (or month) you're in: just enough to stop
+// being over, or everything in savings.
+function renderTopupQuick() {
+  const { start, savings, left } = topupOutcome(0);
+  const over = left != null && left < 0 ? -left : 0;
+  const options = [];
+  if (start === currentStart()) {
+    if (over && over <= savings) options.push([`Just what's over (${money(over)})`, over]);
+    if (savings > 0 && savings !== over) options.push([`All of it (${money(savings)})`, savings]);
+  }
+  $('#topupQuick').replaceChildren(...options.map(([label, cents]) => h('button', {
+    class: 'quick',
+    type: 'button',
+    onclick: () => {
+      $('#topupAmount').value = amountForInput(cents);
+      setTopupError('');
+      updateTopupHint();
+    },
+  }, label)));
+}
+
+// Live preview of where the money ends up.
+function updateTopupHint() {
+  const typed = parseAmount($('#topupAmount').value);
+  const amount = typed > 0 ? typed : 0;
+  const before = topupOutcome(0);
+  const signed = cents => (cents < 0 ? MINUS : '') + money(cents);
+  const problem = amount ? topupProblem(amount, before) : '';
+  if (problem) { $('#topupHint').textContent = problem; return; }
+  const { start, savings, left } = amount ? topupOutcome(amount) : before;
+  const phrase = periodPhrase(start);
+  const past = start < currentStart();
+  let text;
+  if (!amount) {
+    if (left == null) text = `${signed(savings)} in savings.`;
+    else if (left === 0) text = `${signed(savings)} in savings. Nothing to spare ${phrase}.`;
+    else if (left > 0) text = `${signed(savings)} in savings and ${money(left)} to spare ${phrase}.`;
+    else text = `${signed(savings)} in savings. ${past ? 'You went' : "You're"} ${money(-left)} over ${phrase}.`;
+  } else if (left == null) {
+    text = `Leaves ${signed(savings)} in savings.`;
+  } else if (left > 0) {
+    text = `Leaves ${signed(savings)} in savings and ${money(left)} to spare ${phrase}.`;
+  } else if (left === 0) {
+    text = `Leaves ${signed(savings)} in savings and covers exactly what ${past ? 'you went' : "you're"} over ${phrase}.`;
+  } else {
+    text = `Leaves ${signed(savings)} in savings. Still ${money(-left)} over ${phrase}.`;
+  }
+  $('#topupHint').textContent = text;
+}
+
+function submitTopup(e) {
+  e.preventDefault();
+  const amount = parseAmount($('#topupAmount').value);
+  const before = topupOutcome(0);
+  const problem = topupProblem(amount, before);
+  if (problem) {
+    setTopupError(problem);
+    $('#topupAmount').focus();
+    return;
+  }
+  const m = topupEditing;
+  const was = m ? topupOutcome(m.amount) : before;
+  const after = topupOutcome(amount);
+  const previous = m?.amount;
+  let id;
+  if (m) {
+    m.amount = amount;
+    id = m.id;
+  } else {
+    id = newId();
+    const move = { id, amount, date: today(), created: Date.now() };
+    // Moved while trying the sample, so it goes when the sample is cleared.
+    if (state.tx.some(t => t.sample)) move.sample = true;
+    state.topups.push(move);
+  }
+  save();
+  topupReturnKey = `move:${id}`;
+  topupDialog.close();
+  highlightId = id;
+  render();
+
+  const unit = state.period;
+  const undo = () => {
+    if (m) m.amount = previous;
+    else state.topups = state.topups.filter(x => x.id !== id);
+    save();
+    render();
+  };
+  let message = m ? 'Saved' : `Moved ${money(amount)} into this ${unit}'s jar`;
+  if (after.start === currentStart() && after.left != null) {
+    const { current } = streakInfo(periodTotals());
+    if (was.left < 0 && after.left >= 0) {
+      message = current > 0 ? `Covered. Your ${current}-${unit} streak is safe.` : "Covered. You're back under your limit.";
+    } else if (after.left < 0) {
+      message = `${m ? 'Saved' : `Moved ${money(amount)}`}. Still ${money(-after.left)} over this ${unit}.`;
+    } else if (m) {
+      message = `Saved. ${money(after.left)} left this ${unit}.`;
+    }
+  }
+  toast(message, 'Undo', undo);
+}
+
+function removeTopup() {
+  const m = topupEditing;
+  const index = state.topups.indexOf(m);
+  if (index < 0) return;
+  const { start, left } = topupOutcome(0);
+  state.topups.splice(index, 1);
+  save();
+  topupDialog.close();
+  render();
+  const over = start === currentStart() && left != null && left < 0;
+  toast(over ? `Moved back to savings. You're ${money(-left)} over this ${state.period}.` : 'Moved back to savings', 'Undo', () => {
+    state.topups.push(m);
+    highlightId = m.id;
+    save();
+    render();
+  });
+}
+
 /* --------------------------------------------------------------- settings */
 
 const settingsDialog = $('#settingsDialog');
@@ -1366,7 +1627,7 @@ function renderSettings() {
   for (const r of $$('input[name="theme"]')) r.checked = r.value === state.theme;
   renderCategoryEditors();
   renderLastBackup();
-  $('#clearSample').hidden = !state.tx.some(t => t.sample);
+  $('#clearSample').hidden = !state.tx.some(t => t.sample) && !state.topups.some(m => m.sample);
   renderInstall();
 }
 
@@ -1629,6 +1890,7 @@ function loadSample() {
 function clearSample() {
   state.tx = state.tx.filter(t => !t.sample);
   state.limits = state.limits.filter(e => !e.sample);
+  state.topups = state.topups.filter(m => !m.sample);
   view.cat = null;
   save();
   render();
@@ -1672,7 +1934,7 @@ function greetNewPeriod() {
   save();
   if (!seen || seen >= now) return;
   const prev = shiftPeriod(now, -1);
-  const limit = limitFor(prev);
+  const limit = jarFor(prev);
   if (limit == null) return;
   const spent = spentIn(prev);
   const unit = state.period;
@@ -1771,6 +2033,21 @@ function init() {
   txDialog.addEventListener('close', () => {
     const key = txReturnKey;
     txReturnKey = null;
+    if (!key) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement && document.activeElement !== document.body) return;
+      focusByKey(key, $('#txTitle'));
+    });
+  });
+
+  // add from savings
+  $('#topupOpen').addEventListener('click', () => openTopup());
+  topupForm.addEventListener('submit', submitTopup);
+  $('#topupAmount').addEventListener('input', () => { setTopupError(''); updateTopupHint(); });
+  $('#topupRemove').addEventListener('click', removeTopup);
+  topupDialog.addEventListener('close', () => {
+    const key = topupReturnKey;
+    topupReturnKey = null;
     if (!key) return;
     requestAnimationFrame(() => {
       if (document.activeElement && document.activeElement !== document.body) return;
